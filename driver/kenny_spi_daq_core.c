@@ -4,38 +4,37 @@
 #include <linux/iio/buffer.h>
 #include <linux/iio/triggered_buffer.h>
 #include <linux/iio/trigger_consumer.h>
-#include <linux/interrupt.h>
 #include <linux/mutex.h>
-#include <linux/delay.h>
 #include <linux/property.h>
-#include <linux/unaligned.h>
+#include <linux/bitops.h>
+#include <linux/interrupt.h>
 
-/*
- * Reference SPI/IIO driver skeleton for an SPI ADC with a conversion-ready IRQ.
- * The on-wire command/register format is intentionally isolated in adc_read_sample().
- * Replace that function with the selected ADC datasheet's exact transaction before use.
- */
 #define KENNY_DAQ_CHANNELS 2
-#define KENNY_DAQ_SCAN_BYTES 8
 
 struct kenny_daq_state {
  struct spi_device *spi;
  struct mutex lock;
- struct iio_trigger *trig;
- u16 sample[KENNY_DAQ_CHANNELS];
- u64 timestamp __aligned(8);
- u32 overruns;
+ u32 conversion_errors;
 };
 
+/*
+ * REPLACE with the selected ADC datasheet's command framing, conversion delay,
+ * status-bit handling and calibration. This placeholder is intentionally not
+ * advertised as a driver for ADS8688 or any other specific ADC.
+ */
 static int adc_read_sample(struct kenny_daq_state *st, unsigned int channel, u16 *value)
 {
- /* Generic placeholder SPI transaction: NOT an ADS8688/ADS1118 register implementation. */
  u8 tx[2] = { (u8)(0x80 | (channel & 0x0f)), 0x00 };
  u8 rx[2] = { 0 };
- struct spi_transfer xfer = { .tx_buf = tx, .rx_buf = rx, .len = sizeof(tx), .speed_hz = st->spi->max_speed_hz };
+ struct spi_transfer xfer = {
+  .tx_buf = tx, .rx_buf = rx, .len = sizeof(tx),
+  .speed_hz = st->spi->max_speed_hz,
+ };
  int ret = spi_sync_transfer(st->spi, &xfer, 1);
- if (ret)
+ if (ret) {
+  st->conversion_errors++;
   return ret;
+ }
  *value = ((u16)rx[0] << 8) | rx[1];
  return 0;
 }
@@ -62,7 +61,9 @@ static const struct iio_info kenny_daq_iio_info = { .read_raw = kenny_daq_read_r
 #define KENNY_DAQ_CHAN(_idx) { \
  .type = IIO_VOLTAGE, .indexed = 1, .channel = (_idx), \
  .info_mask_separate = BIT(IIO_CHAN_INFO_RAW), \
- .scan_index = (_idx), .scan_type = { .sign = 'u', .realbits = 16, .storagebits = 16, .endianness = IIO_LE } }
+ .scan_index = (_idx), \
+ .scan_type = { .sign = 'u', .realbits = 16, .storagebits = 16, .endianness = IIO_LE } \
+}
 static const struct iio_chan_spec kenny_daq_channels[] = {
  KENNY_DAQ_CHAN(0), KENNY_DAQ_CHAN(1),
  IIO_CHAN_SOFT_TIMESTAMP(2),
@@ -73,19 +74,16 @@ static irqreturn_t kenny_daq_trigger_handler(int irq, void *p)
  struct iio_poll_func *pf = p;
  struct iio_dev *indio_dev = pf->indio_dev;
  struct kenny_daq_state *st = iio_priv(indio_dev);
- struct { u16 ch0; u16 ch1; s64 ts __aligned(8); } scan;
+ struct { u16 ch0; u16 ch1; s64 ts __aligned(8); } scan = { 0 };
  int ret0, ret1;
  (void)irq;
- memset(&scan, 0, sizeof(scan));
  mutex_lock(&st->lock);
  ret0 = adc_read_sample(st, 0, &scan.ch0);
- ret1 = adc_read_sample(st, 1, &scan.ch1);
+ ret1 = ret0 ? ret0 : adc_read_sample(st, 1, &scan.ch1);
  mutex_unlock(&st->lock);
- if (!ret0 && !ret1) {
+ if (!ret1) {
   scan.ts = iio_get_time_ns(indio_dev);
   iio_push_to_buffers_with_timestamp(indio_dev, &scan, scan.ts);
- } else {
-  st->overruns++;
  }
  iio_trigger_notify_done(indio_dev->trig);
  return IRQ_HANDLED;
@@ -111,11 +109,11 @@ static int kenny_daq_probe(struct spi_device *spi)
  ret = devm_iio_triggered_buffer_setup(&spi->dev, indio_dev, NULL,
   kenny_daq_trigger_handler, NULL);
  if (ret)
-  return dev_err_probe(&spi->dev, ret, "buffer setup failed\n");
+  return dev_err_probe(&spi->dev, ret, "buffer setup failed\\n");
  ret = devm_iio_device_register(&spi->dev, indio_dev);
  if (ret)
-  return dev_err_probe(&spi->dev, ret, "IIO registration failed\n");
- dev_info(&spi->dev, "reference SPI DAQ IIO device registered\n");
+  return dev_err_probe(&spi->dev, ret, "IIO registration failed\\n");
+ dev_info(&spi->dev, "reference SPI DAQ IIO device registered\\n");
  return 0;
 }
 
@@ -128,7 +126,6 @@ MODULE_DEVICE_TABLE(spi, kenny_daq_ids);
 static struct spi_driver kenny_daq_driver = {
  .driver = { .name = "kenny-spi-daq", .of_match_table = kenny_daq_of_match },
  .probe = kenny_daq_probe,
- .remove = NULL,
  .id_table = kenny_daq_ids,
 };
 module_spi_driver(kenny_daq_driver);
