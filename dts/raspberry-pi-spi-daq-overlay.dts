@@ -1,0 +1,21 @@
+/dts-v1/;
+/plugin/;
+
+/* Example only; SPI ADC protocol and interrupt GPIO depend on the chosen hardware. */
+/ {
+ compatible = "brcm,bcm2835";
+ fragment@0 {
+  target = <&spi0>;
+  __overlay__ {
+   status = "okay";
+   #address-cells = <1>;
+   #size-cells = <0>;
+   kenny_adc@0 {
+    compatible = "kenny,spi-daq-reference";
+    reg = <0>;
+    spi-max-frequency = <1000000>;
+    status = "okay";
+   };
+  };
+ };
+};
