@@ -1,0 +1,10 @@
+*.o
+*.ko
+*.mod*
+*.order
+*.symvers
+.*.cmd
+build/
+__pycache__/
+*.pyc
+*.csv
